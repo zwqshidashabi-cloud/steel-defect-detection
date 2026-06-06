@@ -1,0 +1,35 @@
+# Byte-compiled
+__pycache__/
+*.py[cod]
+*.pyc
+
+# Build / Dist
+build/
+dist/
+*.egg-info/
+
+# Data
+data/
+*.pth
+*.pt
+*.onnx
+*.engine
+*.weights
+
+# Runs / Logs
+runs/
+wandb/
+lightning_logs/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Env
+.env
+venv/
+.venv/
