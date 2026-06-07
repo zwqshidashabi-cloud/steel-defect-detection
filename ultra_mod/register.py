@@ -139,13 +139,12 @@ def patched_parse_model(d, ch, verbose=True):
 
         # 构建模块
         if m is PGI_Detect:
-            # 特殊处理: PGI_Detect(ch_list, nc)
-            # args 经过扩展后 = [nc(6), reg_max(16), end2end(None), ch_list[...]]
-            ch_list = args[-1]  # 最后一个参数是 ch list
-            nc_val = args[0] if isinstance(args[0], int) else 6  # 第一个参数是 nc
+            # PGI_Detect 签名: PGI_Detect(nc, reg_max, end2end, ch) 与 Detect 一致
+            ch_list = [ch[x] for x in f]
+            nc_val = args[0] if isinstance(args[0], int) else 6
             if verbose:
-                print(f"    PGI_Detect: ch_list={ch_list}, nc={nc_val}")
-            m_ = m(ch_list, nc_val)
+                print(f"    PGI_Detect: ch_list={ch_list}, nc={nc_val}, reg_max={reg_max}")
+            m_ = m(nc=nc_val, reg_max=reg_max, end2end=False, ch=ch_list)
         elif n > 1:
             m_ = torch.nn.Sequential(*(m(*args) for _ in range(n)))
         else:

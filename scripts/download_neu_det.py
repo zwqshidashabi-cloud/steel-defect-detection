@@ -1,99 +1,87 @@
 """
 NEU-DET 钢材缺陷数据集下载与准备
+自动从 kagglehub 下载 (无需 API key) 并转换为 YOLO 格式
 
-数据集来源: https://www.kaggle.com/datasets/kaustubhdikshit/neu-surface-defect-database
+使用方法:
+    D:\Anaconda\python.exe scripts/download_neu_det.py
 """
 
-import os
-import sys
-import zipfile
+import os, sys, xml.etree.ElementTree as ET, shutil
 from pathlib import Path
 
-sys.path.insert(0, r"D:\projects\steel_detection")
-
 DATA_DIR = Path(r"D:\projects\steel_detection\data\NEU-DET")
-IMAGES_DIR = DATA_DIR / "images"
-LABELS_DIR = DATA_DIR / "labels"
-
-# 6类缺陷
-CLASSES = ["crazing", "inclusion", "patches", "pitted_surface", "rolled-in_scale", "scratches"]
+CLASSES = ["crazing", "inclusion", "patches", "pitted_surface",
+           "rolled-in_scale", "scratches"]
+CLASS_TO_ID = {n: i for i, n in enumerate(CLASSES)}
 
 
-def create_dataset_yaml():
-    """生成 data.yaml"""
-    yaml_content = f"""
-# NEU-DET 钢材缺陷检测数据集
-path: {str(DATA_DIR).replace(chr(92), '/')}
-train: images/train
-val: images/val
-
-nc: 6
-names: {CLASSES}
-
-# 数据增强
-mosaic: 0.5
-mixup: 0.1
-copy_paste: 0.0
-flipud: 0.5
-fliplr: 0.5
-hsv_h: 0.015
-hsv_s: 0.7
-hsv_v: 0.4
-degrees: 10.0
-translate: 0.1
-scale: 0.5
-shear: 2.0
-"""
-    yaml_path = DATA_DIR / "data.yaml"
-    yaml_path.write_text(yaml_content)
-    print(f"[NEU-DET] data.yaml 已生成: {yaml_path}")
+def xml_to_yolo(xml_path):
+    """VOC XML -> YOLO txt lines"""
+    root = ET.parse(xml_path).getroot()
+    w, h = int(root.find("size/width").text), int(root.find("size/height").text)
+    lines = []
+    for obj in root.findall("object"):
+        name = obj.find("name").text
+        if name not in CLASS_TO_ID:
+            continue
+        bb = obj.find("bndbox")
+        xmin, ymin = float(bb.find("xmin").text), float(bb.find("ymin").text)
+        xmax, ymax = float(bb.find("xmax").text), float(bb.find("ymax").text)
+        cx = ((xmin + xmax) / 2) / w
+        cy = ((ymin + ymax) / 2) / h
+        bw = (xmax - xmin) / w
+        bh = (ymax - ymin) / h
+        lines.append(f"{CLASS_TO_ID[name]} {cx:.6f} {cy:.6f} {bw:.6f} {bh:.6f}")
+    return lines
 
 
-def prepare_dataset():
-    """
-    NEU-DET 数据集准备
+def process(src_img_dir, src_ann_dir, dst_img_dir, dst_lbl_dir):
+    os.makedirs(dst_img_dir, exist_ok=True)
+    os.makedirs(dst_lbl_dir, exist_ok=True)
+    for d in src_img_dir.iterdir():
+        if d.is_dir():
+            for f in d.glob("*.jpg"):
+                if not (dst_img_dir / f.name).exists():
+                    shutil.copy2(str(f), str(dst_img_dir))
+    for f in src_ann_dir.glob("*.xml"):
+        lines = xml_to_yolo(f)
+        if lines:
+            (dst_lbl_dir / (f.stem + ".txt")).write_text("\n".join(lines))
+    return len(list(dst_img_dir.glob("*.jpg"))), len(list(dst_lbl_dir.glob("*.txt")))
 
-    两种方式:
-    1. 自动从 GitHub 源下载 (推荐)
-    2. 手动下载后放在 data/NEU-DET/raw/
-    """
-    # ── 方式 1: 从 mirror 下载 ──
-    os.makedirs(DATA_DIR, exist_ok=True)
 
-    # NEU-DET 可从公开源下载
-    # 使用 GitHub 上的转换版本
-    url = (
-        "https://github.com/kaustubhikd/NEU-DET/archive/refs/heads/main.zip"
-    )
+def main():
+    # 检查已有数据
+    if (DATA_DIR / "images" / "train").exists() and len(list((DATA_DIR / "images" / "train").glob("*.jpg"))) > 0:
+        print(f"[OK] 数据集已存在")
+        return
 
-    zip_path = DATA_DIR / "neu_det_raw.zip"
-    extract_path = DATA_DIR / "raw"
+    # 下载
+    print("[Download] 从 Kaggle 下载 NEU-DET...")
+    try:
+        import kagglehub
+    except ImportError:
+        import subprocess
+        subprocess.run([sys.executable, "-m", "pip", "install", "kagglehub", "-q"])
+        import kagglehub
+    src = Path(kagglehub.dataset_download("kaustubhdikshit/neu-surface-defect-database")) / "NEU-DET"
 
-    if not (IMAGES_DIR / "train").exists():
-        print(f"[NEU-DET] 下载数据集中...")
-        print(f"  下载地址: {url}")
-        print(f"  请手动下载或从 Kaggle 获取: https://www.kaggle.com/datasets/kaustubhdikshit/neu-surface-defect-database")
-        print(f"\n  下载后将文件放到 {extract_path} 目录下")
-        print(f"  然后运行: python scripts/prepare_neu_det.py")
+    # 转换 train
+    n_img, n_lbl = process(src / "train" / "images", src / "train" / "annotations",
+                            DATA_DIR / "images" / "train", DATA_DIR / "labels" / "train")
+    print(f"  train: {n_img} imgs, {n_lbl} labels")
 
-        # 创建目录结构
-        os.makedirs(IMAGES_DIR / "train", exist_ok=True)
-        os.makedirs(IMAGES_DIR / "val", exist_ok=True)
-        os.makedirs(LABELS_DIR / "train", exist_ok=True)
-        os.makedirs(LABELS_DIR / "val", exist_ok=True)
+    # 转换 valid
+    val_k = "validation" if (src / "validation").exists() else "valid"
+    n_img, n_lbl = process(src / val_k / "images", src / val_k / "annotations",
+                            DATA_DIR / "images" / "val", DATA_DIR / "labels" / "val")
+    print(f"  val: {n_img} imgs, {n_lbl} labels")
 
-        print(f"\n[NEU-DET] 目录结构已创建:")
-        print(f"  {DATA_DIR}/")
-        print(f"    ├── images/train/   (训练图片)")
-        print(f"    ├── images/val/     (验证图片)")
-        print(f"    ├── labels/train/   (训练标签)")
-        print(f"    ├── labels/val/     (验证标签)")
-        print(f"    └── data.yaml       (数据集配置文件)")
-    else:
-        print(f"[NEU-DET] 数据集已存在: {IMAGES_DIR}")
-
-    create_dataset_yaml()
+    # data.yaml
+    yaml = f"path: {str(DATA_DIR).replace(chr(92), '/')}\ntrain: images/train\nval: images/val\nnc: 6\nnames: {CLASSES}\n"
+    (DATA_DIR / "data.yaml").write_text(yaml)
+    print(f"[OK] NEU-DET 已就绪!")
 
 
 if __name__ == "__main__":
-    prepare_dataset()
+    main()
